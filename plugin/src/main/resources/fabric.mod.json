@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "agi-mc-bot-bridge",
+  "version": "1.0.0",
+  "name": "AGI MC Bot Bridge",
+  "description": "让 AI 通过 MCP 协议控制 Minecraft 中的 Bot 角色",
+  "authors": ["agi"],
+  "contact": {},
+  "license": "MIT",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["dev.agi.mcbot.AgiMcBotMod"]
+  },
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "26.2",
+    "java": ">=25",
+    "fabric-api": "*"
+  }
+}

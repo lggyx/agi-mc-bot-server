@@ -1,0 +1,324 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://agi-mc.dev/protocol/rpc.json",
+  "title": "AGI MC Bot RPC Protocol",
+  "description": "MCP Server 与 Fabric Mod 之间的 JSON-RPC 2.0 协议定义",
+  "definitions": {
+    "Vec3": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
+      },
+      "required": ["x", "y", "z"]
+    },
+    "BlockPos": {
+      "type": "object",
+      "properties": {
+        "x": { "type": "integer" },
+        "y": { "type": "integer" },
+        "z": { "type": "integer" }
+      },
+      "required": ["x", "y", "z"]
+    },
+    "ItemStack": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "count": { "type": "integer" },
+        "display_name": { "type": "string" },
+        "untrusted": { "type": "boolean" }
+      }
+    },
+    "UntrustedText": {
+      "type": "object",
+      "properties": {
+        "value": { "type": "string" },
+        "source": { "type": "string" },
+        "_warning": { "type": "string" }
+      },
+      "required": ["value"]
+    },
+    "BotState": {
+      "type": "object",
+      "properties": {
+        "bot_id": { "type": "string" },
+        "name": { "type": "string" },
+        "position": { "$ref": "#/definitions/Vec3" },
+        "yaw": { "type": "number" },
+        "pitch": { "type": "number" },
+        "health": { "type": "number" },
+        "food": { "type": "integer" },
+        "gamemode": { "type": "string" },
+        "dimension": { "type": "string" },
+        "on_ground": { "type": "boolean" }
+      }
+    },
+    "NearbyBlock": {
+      "type": "object",
+      "properties": {
+        "pos": { "$ref": "#/definitions/BlockPos" },
+        "id": { "type": "string" },
+        "distance": { "type": "number" }
+      }
+    },
+    "NearbyEntity": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "type": "string" },
+        "position": { "$ref": "#/definitions/Vec3" },
+        "distance": { "type": "number" },
+        "is_player": { "type": "boolean" },
+        "custom_name": { "$ref": "#/definitions/UntrustedText" }
+      }
+    },
+    "ServerStatus": {
+      "type": "object",
+      "properties": {
+        "tps": { "type": "number" },
+        "mspt": { "type": "number" },
+        "online_players": { "type": "integer" },
+        "max_players": { "type": "integer" },
+        "used_memory_mb": { "type": "integer" },
+        "max_memory_mb": { "type": "integer" },
+        "uptime_seconds": { "type": "integer" }
+      }
+    }
+  },
+  "methods": {
+    "sense.getState": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" }
+        },
+        "required": ["bot_id"]
+      },
+      "result": { "$ref": "#/definitions/BotState" }
+    },
+    "sense.getNearbyBlocks": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "block_id": { "type": "string" },
+          "radius": { "type": "integer", "default": 16, "maximum": 32 },
+          "limit": { "type": "integer", "default": 16, "maximum": 64 }
+        },
+        "required": ["bot_id"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/NearbyBlock" }
+          }
+        }
+      }
+    },
+    "sense.getNearbyEntities": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "radius": { "type": "number", "default": 16, "maximum": 64 },
+          "include_players": { "type": "boolean", "default": true }
+        },
+        "required": ["bot_id"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "entities": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/NearbyEntity" }
+          }
+        }
+      }
+    },
+    "sense.getInventory": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" }
+        },
+        "required": ["bot_id"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": { "$ref": "#/definitions/ItemStack" }
+          }
+        }
+      }
+    },
+    "action.moveTo": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "target": { "$ref": "#/definitions/Vec3" },
+          "timeout_ms": { "type": "integer", "default": 30000 }
+        },
+        "required": ["bot_id", "target"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "final_position": { "$ref": "#/definitions/Vec3" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "action.lookAt": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "target": { "$ref": "#/definitions/Vec3" }
+        },
+        "required": ["bot_id", "target"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "yaw": { "type": "number" },
+          "pitch": { "type": "number" }
+        }
+      }
+    },
+    "action.mineBlock": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "pos": { "$ref": "#/definitions/BlockPos" },
+          "timeout_ms": { "type": "integer", "default": 30000 }
+        },
+        "required": ["bot_id", "pos"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "broken_block": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "action.placeBlock": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "pos": { "$ref": "#/definitions/BlockPos" },
+          "item_id": { "type": "string" }
+        },
+        "required": ["bot_id", "pos"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "action.attack": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "entity_id": { "type": "string" }
+        },
+        "required": ["bot_id", "entity_id"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "action.useItem": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "item_id": { "type": "string" },
+          "target_pos": { "$ref": "#/definitions/BlockPos" }
+        },
+        "required": ["bot_id"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "server.getStatus": {
+      "params": { "type": "object" },
+      "result": { "$ref": "#/definitions/ServerStatus" }
+    },
+    "bot.list": {
+      "params": { "type": "object" },
+      "result": {
+        "type": "object",
+        "properties": {
+          "bots": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "bot_id": { "type": "string" },
+                "name": { "type": "string" },
+                "online": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "bot.spawn": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string" },
+          "position": { "$ref": "#/definitions/Vec3" }
+        },
+        "required": ["name"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" },
+          "error": { "type": "string" }
+        }
+      }
+    },
+    "bot.despawn": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "bot_id": { "type": "string" }
+        },
+        "required": ["bot_id"]
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "success": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}
