@@ -63,7 +63,11 @@ const tools = [
       },
       required: ['name'],
     },
-    handler: async (a: any) => rpc.call('bot.spawn', a),
+    // The mod's bot.spawn expects `bot_id`, while the MCP tool exposes `name`.
+    handler: async (a: any) => rpc.call('bot.spawn', {
+      bot_id: a.name,
+      position: a.position,
+    }),
   },
   {
     name: 'mc_bot_despawn',

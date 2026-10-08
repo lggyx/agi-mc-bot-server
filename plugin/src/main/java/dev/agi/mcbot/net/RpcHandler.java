@@ -201,7 +201,14 @@ public class RpcHandler {
         double x = t.path("x").asDouble();
         double y = t.path("y").asDouble();
         double z = t.path("z").asDouble();
+        return lookAt(bot, x, y, z);
+    }
 
+    /**
+     * Rotate the bot so it faces the given world coordinates.
+     * Shared by action.lookAt and action.mineBlock.
+     */
+    private Object lookAt(BotHandle bot, double x, double y, double z) {
         ServerPlayerEntity player = bot.getPlayer();
         Vector3d eye = player.getEyePosition(1.0f);
         double dx = x - eye.x;
@@ -231,7 +238,7 @@ public class RpcHandler {
         World world = player.level;
 
         // Look at the block first, then mine
-        actionLookAt(p);
+        lookAt(bot, bp.getX() + 0.5, bp.getY() + 0.5, bp.getZ() + 0.5);
 
         server.execute(() -> {
             // Break the block directly (Phase 1 simplification, no dig animation or drop logic)
