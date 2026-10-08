@@ -45,15 +45,24 @@ repositories {
     mavenCentral()
 }
 
+// Dependencies bundled into the mod jar. Only libraries that are NOT provided
+// by the Forge runtime belong here. Never use `runtimeClasspath` for this:
+// under ForgeGradle it also contains Minecraft and Forge themselves, which
+// makes ModLauncher treat the mod jar as a transformation service provider
+// and silently skip it during the mods folder scan.
+configurations {
+    shade
+    compileOnly.extendsFrom(shade)
+}
+
 dependencies {
     minecraft 'net.minecraftforge:forge:1.16.5-36.2.34'
 
-    // HTTP 服务（Javalin 3.x 是最后一个支持 Java 8 的系列）
-    implementation 'io.javalin:javalin:3.13.13'
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.12.7.1'
+    // JSON (bundled into the jar)
+    shade 'com.fasterxml.jackson.core:jackson-databind:2.12.7.1'
 
-    // 日志（Forge 自带 log4j2，这里只引用 API）
-    implementation 'org.apache.logging.log4j:log4j-api:2.17.2'
+    // Logging: Forge ships log4j2, so only the API is needed at compile time.
+    compileOnly 'org.apache.logging.log4j:log4j-api:2.17.2'
 }
 
 tasks.withType(JavaCompile).configureEach {
@@ -72,6 +81,16 @@ jar {
             "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
         ])
     }
+
+    // Bundle only the `shade` configuration (Jackson). MC/Forge classes are
+    // provided by the runtime and must never be embedded in the mod jar.
+    from {
+        configurations.shade.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude 'META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA'
+    exclude 'META-INF/*.SF', 'META-INF/maven/**'
+    exclude 'module-info.class'
 }
 
 jar.finalizedBy('reobfJar')

@@ -2,6 +2,9 @@ package dev.agi.mcbot.bot;
 
 import com.mojang.authlib.GameProfile;
 import net.minecraft.entity.player.ServerPlayerEntity;
+import net.minecraft.network.NetworkManager;
+import net.minecraft.network.PacketDirection;
+import net.minecraft.network.play.ServerPlayNetHandler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.management.PlayerInteractionManager;
 import net.minecraft.util.math.vector.Vector3d;
@@ -14,16 +17,20 @@ import java.util.UUID;
 /**
  * FakePlayer factory for Forge 1.16.5.
  *
- * ServerPlayerEntity constructor (official mappings):
- *   ServerPlayerEntity(MinecraftServer, ServerWorld, GameProfile, PlayerInteractionManager)
+ * This mirrors what net.minecraftforge.common.util.FakePlayer does internally:
  *
- * After construction we must:
- *  1. set position / rotation
- *  2. add to world via addFreshEntity (addEntity/spawnEntity do not exist in 1.16.5)
- *  3. register with PlayerList via placeNewPlayer(NetworkManager, ServerPlayerEntity)
+ *  1. Build a PlayerInteractionManager for the world.
+ *  2. Construct ServerPlayerEntity(server, world, profile, interactionManager).
+ *  3. Install a ServerPlayNetHandler backed by a dummy NetworkManager so that
+ *     the entity has a non-null `connection` field. Without this, the entity
+ *     tracker (TrackedEntity) NPEs on the first world tick and crashes the
+ *     server.
+ *  4. Set position / rotation.
+ *  5. Add to the world with addFreshEntity.
  *
- * Note: a directly constructed ServerPlayerEntity has connection == null.
- * Any code path that sends a packet will NPE, so we only use server-side logic.
+ * We deliberately do NOT call PlayerList.placeNewPlayer(): it sends join
+ * packets, registers the player in the player list and requires a real
+ * NetworkManager. A bot is a server-side entity only.
  */
 public final class FakePlayerFactory {
     private static final Logger LOGGER = LogManager.getLogger();
@@ -40,20 +47,22 @@ public final class FakePlayerFactory {
             ServerPlayerEntity player =
                     new ServerPlayerEntity(server, world, profile, interactionManager);
 
-            // 3. Position and rotation
+            // 3. Give it a connection backed by a dummy NetworkManager.
+            //    ServerPlayNetHandler's constructor also assigns player.connection.
+            NetworkManager dummy = new NetworkManager(PacketDirection.CLIENTBOUND);
+            new ServerPlayNetHandler(server, dummy, player);
+
+            // 4. Position and rotation
             player.setPos(pos.x, pos.y, pos.z);
             player.yRot = 0f;
             player.xRot = 0f;
             player.setYHeadRot(0f);
 
-            // 4. Add to world (does not trigger the real player connection flow)
+            // 5. Add to world so it is tracked and ticked
             world.addFreshEntity(player);
 
-            // 5. Register with PlayerList so /list, commands and events work
-            server.getPlayerList().placeNewPlayer(null, player);
-
-            LOGGER.info("[AGI-MC] FakePlayer created: {} id={}",
-                    profile.getName(), player.getId());
+            LOGGER.info("[AGI-MC] FakePlayer created: {} id={} at ({}, {}, {})",
+                    profile.getName(), player.getId(), pos.x, pos.y, pos.z);
 
             return player;
         } catch (Exception e) {

@@ -3,20 +3,29 @@ package dev.agi.mcbot.net;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.sun.net.httpserver.HttpExchange;
 import dev.agi.mcbot.config.ModConfig;
-import io.javalin.Javalin;
-import io.javalin.http.Context;
 import net.minecraft.server.MinecraftServer;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 /**
- * HTTP JSON-RPC service.
+ * HTTP JSON-RPC service backed by the JDK built-in HttpServer.
+ *
+ * Using the JDK server instead of a third-party framework keeps the mod jar
+ * free of Kotlin/Jetty/SLF4J transitive dependencies.
  *
  * Endpoints:
  *   POST /rpc     JSON-RPC 2.0
@@ -28,47 +37,43 @@ public class HttpServer {
     private static final Logger LOGGER = LogManager.getLogger();
 
     private final ModConfig config;
-    private final MinecraftServer server;
     private final ObjectMapper mapper = new ObjectMapper();
     private final RpcHandler handler;
     private final RateLimiter rateLimiter;
 
-    private Javalin app;
+    private com.sun.net.httpserver.HttpServer httpd;
     private ScheduledExecutorService scheduler;
 
     public HttpServer(ModConfig config, MinecraftServer server) {
         this.config = config;
-        this.server = server;
         this.handler = new RpcHandler(server);
         this.rateLimiter = new RateLimiter(config.getRateLimit());
     }
 
-    public void start() {
-        app = Javalin.create()
-                .before(ctx -> {
-                    if (ctx.path().equals("/health")) return;
+    public void start() throws IOException {
+        httpd = com.sun.net.httpserver.HttpServer.create(
+                new InetSocketAddress(config.getBindAddress(), config.getBindPort()), 0);
 
-                    String auth = ctx.header("Authorization");
-                    if (auth == null || !auth.equals("Bearer " + config.getAuthToken())) {
-                        ctx.status(401).json(errorBody(null, -32001, "Unauthorized"));
-                        return;
-                    }
+        httpd.createContext("/rpc", exchange -> {
+            if (!authorize(exchange)) return;
+            if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
+                send(exchange, 405, errorBody(null, -32600, "Method Not Allowed").toString());
+                return;
+            }
+            handleRpc(exchange);
+        });
 
-                    if (!rateLimiter.tryAcquire(ctx.ip())) {
-                        ctx.status(429).json(errorBody(null, -32000, "Rate limit exceeded"));
-                    }
-                })
-                .post("/rpc", this::handleRpc)
-                .get("/health", ctx -> {
-                    Map<String, String> health = new java.util.HashMap<>();
-                    health.put("status", "ok");
-                    ctx.json(health);
-                })
-                .exception(Exception.class, (e, ctx) -> {
-                    LOGGER.error("[AGI-MC] HTTP exception", e);
-                    ctx.status(500).json(errorBody(null, -32603, "Internal error"));
-                })
-                .start(config.getBindAddress(), config.getBindPort());
+        httpd.createContext("/health", exchange -> {
+            Map<String, String> health = new HashMap<>();
+            health.put("status", "ok");
+            send(exchange, 200, mapper.valueToTree(health).toString());
+        });
+
+        httpd.createContext("/", exchange ->
+                send(exchange, 404, errorBody(null, -32601, "Not Found").toString()));
+
+        httpd.setExecutor(Executors.newFixedThreadPool(4));
+        httpd.start();
 
         // periodically clean up expired rate limit buckets
         scheduler = Executors.newSingleThreadScheduledExecutor();
@@ -83,19 +88,34 @@ public class HttpServer {
             scheduler.shutdownNow();
             scheduler = null;
         }
-        if (app != null) {
-            app.stop();
-            app = null;
+        if (httpd != null) {
+            httpd.stop(0);
+            httpd = null;
         }
         LOGGER.info("[AGI-MC] HTTP service stopped");
     }
 
-    private void handleRpc(Context ctx) {
+    private boolean authorize(HttpExchange exchange) throws IOException {
+        String auth = exchange.getRequestHeaders().getFirst("Authorization");
+        if (auth == null || !auth.equals("Bearer " + config.getAuthToken())) {
+            send(exchange, 401, errorBody(null, -32001, "Unauthorized").toString());
+            return false;
+        }
+
+        String ip = clientIp(exchange);
+        if (!rateLimiter.tryAcquire(ip)) {
+            send(exchange, 429, errorBody(null, -32000, "Rate limit exceeded").toString());
+            return false;
+        }
+        return true;
+    }
+
+    private void handleRpc(HttpExchange exchange) throws IOException {
         JsonNode req;
         try {
-            req = mapper.readTree(ctx.body());
+            req = mapper.readTree(readAll(exchange.getRequestBody()));
         } catch (Exception e) {
-            ctx.json(errorBody(null, -32700, "Parse error"));
+            send(exchange, 400, errorBody(null, -32700, "Parse error").toString());
             return;
         }
 
@@ -104,7 +124,7 @@ public class HttpServer {
         JsonNode id = req.get("id");
 
         if (method == null) {
-            ctx.json(errorBody(id, -32600, "Invalid Request"));
+            send(exchange, 400, errorBody(id, -32600, "Invalid Request").toString());
             return;
         }
 
@@ -114,22 +134,49 @@ public class HttpServer {
             resp.put("jsonrpc", "2.0");
             if (id != null) resp.set("id", id);
             resp.set("result", mapper.valueToTree(result));
-            ctx.json(resp);
+            send(exchange, 200, resp.toString());
         } catch (RpcException e) {
-            ctx.json(errorBody(id, e.getCode(), e.getMessage()));
+            send(exchange, 200, errorBody(id, e.getCode(), e.getMessage()).toString());
         } catch (Exception e) {
             LOGGER.error("[AGI-MC] RPC failed: " + method, e);
-            ctx.json(errorBody(id, -32603, "Internal error: " + e.getMessage()));
+            send(exchange, 200, errorBody(id, -32603, "Internal error: " + e.getMessage()).toString());
+        }
+    }
+
+    private void send(HttpExchange exchange, int status, String body) throws IOException {
+        byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        exchange.getResponseHeaders().set("Content-Type", "application/json; charset=utf-8");
+        exchange.sendResponseHeaders(status, bytes.length);
+        try (OutputStream out = exchange.getResponseBody()) {
+            out.write(bytes);
         }
     }
 
     private ObjectNode errorBody(JsonNode id, int code, String message) {
-        ObjectNode resp = new ObjectMapper().createObjectNode();
+        ObjectNode resp = mapper.createObjectNode();
         resp.put("jsonrpc", "2.0");
         if (id != null) resp.set("id", id);
         ObjectNode err = resp.putObject("error");
         err.put("code", code);
         err.put("message", message);
         return resp;
+    }
+
+    private static String clientIp(HttpExchange exchange) {
+        if (exchange.getRemoteAddress() == null
+                || exchange.getRemoteAddress().getAddress() == null) {
+            return "unknown";
+        }
+        return exchange.getRemoteAddress().getAddress().getHostAddress();
+    }
+
+    private static byte[] readAll(InputStream in) throws IOException {
+        ByteArrayOutputStream buf = new ByteArrayOutputStream();
+        byte[] chunk = new byte[4096];
+        int n;
+        while ((n = in.read(chunk)) > 0) {
+            buf.write(chunk, 0, n);
+        }
+        return buf.toByteArray();
     }
 }
