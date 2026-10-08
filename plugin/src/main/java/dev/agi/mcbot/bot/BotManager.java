@@ -1,22 +1,30 @@
 package dev.agi.mcbot.bot;
 
-import net.minecraft.entity.player.PlayerEntity;
+import com.mojang.authlib.GameProfile;
+import dev.agi.mcbot.AgiMcBotMod;
+import net.minecraft.entity.player.ServerPlayerEntity;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.math.Vec3d;
+import net.minecraft.util.math.vector.Vector3d;
+import net.minecraft.world.server.ServerWorld;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-import java.util.*;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Bot 管理器。
+ * Bot manager.
  *
- * 负责 Bot 实体的创建、查找、销毁。
+ * Handles Bot entity creation, lookup, destruction.
  *
- * 注意：当前为骨架实现，FakePlayer 的具体构造方式待 Phase 1 确定。
+ * Uses the ServerPlayerEntity constructor directly (see FakePlayerFactory)
+ * to build a player entity without a real network connection.
  */
 public class BotManager {
+    private static final Logger LOGGER = LogManager.getLogger();
+
     private static BotManager instance;
 
     private final MinecraftServer server;
@@ -28,7 +36,7 @@ public class BotManager {
 
     public static BotManager getInstance() {
         if (instance == null) {
-            throw new IllegalStateException("BotManager 尚未初始化");
+            throw new IllegalStateException("BotManager not initialized");
         }
         return instance;
     }
@@ -37,94 +45,92 @@ public class BotManager {
         instance = new BotManager(server);
     }
 
+    public static void shutdown() {
+        if (instance != null) {
+            instance.despawnAll();
+            instance = null;
+        }
+    }
+
     /**
-     * 生成一个 Bot。
+     * Spawn a Bot.
      *
-     * @param name 玩家名（会显示在玩家列表）
-     * @param pos  出生位置
-     * @return Bot 句柄
+     * @param name Player name (shown in player list)
+     * @param pos  Spawn position
+     * @return Bot handle
      */
-    public synchronized BotHandle spawn(String name, Vec3d pos) {
+    public synchronized BotHandle spawn(String name, Vector3d pos) {
         if (bots.containsKey(name)) {
-            throw new IllegalArgumentException("Bot 已存在: " + name);
+            throw new IllegalArgumentException("Bot already exists: " + name);
         }
 
-        // TODO Phase 1: 实现 FakePlayer 构造
-        // 方案 A: 构造 ServerPlayerEntity，绕过网络层
-        // 方案 B: 自写轻量实体
-        //
-        // 当前先返回占位句柄，便于打通 HTTP -> RPC 链路
-        BotHandle handle = new BotHandle(name, pos);
+        ServerWorld world = server.overworld();
+        if (world == null) {
+            throw new IllegalStateException("Overworld not loaded");
+        }
+
+        // Derive a stable UUID from the name so same-named Bots always get the same UUID
+        UUID botId = FakePlayerFactory.deriveUuid(name);
+        GameProfile profile = new GameProfile(botId, name);
+
+        ServerPlayerEntity player = FakePlayerFactory.create(server, world, profile, pos);
+
+        BotHandle handle = new BotHandle(name, player);
         bots.put(name, handle);
 
-        AgiMcBotMod.LOGGER.info("[AGI-MC] Bot 已生成: {} @ {}", name, pos);
+        LOGGER.info("[AGI-MC] Bot spawned: {} at {}", name, formatPos(pos));
         return handle;
     }
 
-    public Optional<BotHandle> get(String name) {
-        return Optional.ofNullable(bots.get(name));
-    }
-
-    public List<BotHandle> list() {
-        return new ArrayList<>(bots.values());
-    }
-
+    /**
+     * Remove a Bot.
+     */
     public synchronized void despawn(String name) {
         BotHandle handle = bots.remove(name);
-        if (handle != null) {
-            // TODO Phase 1: 移除实体
-            AgiMcBotMod.LOGGER.info("[AGI-MC] Bot 已移除: {}", name);
+        if (handle == null) {
+            throw new IllegalArgumentException("Bot not found: " + name);
         }
-    }
-
-    public synchronized void despawnAll() {
-        for (String name : new ArrayList<>(bots.keySet())) {
-            despawn(name);
-        }
+        handle.getPlayer().remove();
+        LOGGER.info("[AGI-MC] Bot removed: {}", name);
     }
 
     /**
-     * Bot 句柄。
-     *
-     * 封装 Bot 实体引用与元数据。
+     * Remove all Bots.
      */
-    public static class BotHandle {
-        private final String name;
-        private final Vec3d spawnPos;
-        private ServerPlayerEntity entity;
-        private long lastActionTime = System.currentTimeMillis();
-
-        public BotHandle(String name, Vec3d spawnPos) {
-            this.name = name;
-            this.spawnPos = spawnPos;
+    public synchronized void despawnAll() {
+        for (BotHandle handle : bots.values()) {
+            try {
+                handle.getPlayer().remove();
+            } catch (Exception e) {
+                LOGGER.warn("[AGI-MC] Failed to remove Bot: {}", handle.getName(), e);
+            }
         }
+        bots.clear();
+    }
 
-        public String getName() {
-            return name;
+    /**
+     * Find a Bot.
+     */
+    public BotHandle find(String name) {
+        BotHandle handle = bots.get(name);
+        if (handle == null) {
+            throw new IllegalArgumentException("Bot not found: " + name);
         }
+        return handle;
+    }
 
-        public Vec3d getSpawnPos() {
-            return spawnPos;
-        }
+    /**
+     * List all Bot names.
+     */
+    public java.util.Set<String> list() {
+        return bots.keySet();
+    }
 
-        public ServerPlayerEntity getEntity() {
-            return entity;
-        }
+    public MinecraftServer getServer() {
+        return server;
+    }
 
-        public void setEntity(ServerPlayerEntity entity) {
-            this.entity = entity;
-        }
-
-        public boolean isOnline() {
-            return entity != null && !entity.isRemoved();
-        }
-
-        public void touch() {
-            this.lastActionTime = System.currentTimeMillis();
-        }
-
-        public long getIdleMs() {
-            return System.currentTimeMillis() - lastActionTime;
-        }
+    private static String formatPos(Vector3d pos) {
+        return String.format("(%.1f, %.1f, %.1f)", pos.x, pos.y, pos.z);
     }
 }

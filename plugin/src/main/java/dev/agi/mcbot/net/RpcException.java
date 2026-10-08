@@ -1,7 +1,7 @@
 package dev.agi.mcbot.net;
 
 /**
- * RPC 业务异常，携带 JSON-RPC 错误码。
+ * RPC exception carrying a JSON-RPC error code.
  */
 public class RpcException extends RuntimeException {
     private final int code;

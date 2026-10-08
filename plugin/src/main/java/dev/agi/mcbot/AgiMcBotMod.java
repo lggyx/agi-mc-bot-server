@@ -1,73 +1,51 @@
 package dev.agi.mcbot;
 
+import dev.agi.mcbot.bot.BotManager;
 import dev.agi.mcbot.config.ModConfig;
 import dev.agi.mcbot.net.HttpServer;
-import net.fabricmc.api.ModInitializer;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.minecraft.server.MinecraftServer;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import net.minecraftforge.common.MinecraftForge;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
+import net.minecraftforge.fml.common.Mod;
+import net.minecraftforge.fml.event.server.FMLServerStartingEvent;
+import net.minecraftforge.fml.event.server.FMLServerStoppingEvent;
+import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
- * AGI MC Bot Bridge 主入口。
+ * AGI MC Bot Bridge main entry (Forge 1.16.5).
  *
- * 职责：
- * - 加载配置
- * - 启动 HTTP 控制服务
- * - 管理 Bot 生命周期
+ * Responsibilities:
+ * - Load config
+ * - Start HTTP control service
+ * - Manage Bot lifecycle
  */
-public class AgiMcBotMod implements ModInitializer {
-    public static final String MOD_ID = "agi-mc-bot-bridge";
-    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+@Mod("agimcbot")
+public class AgiMcBotMod {
+    public static final String MOD_ID = "agimcbot";
+    public static final Logger LOGGER = LogManager.getLogger(MOD_ID);
 
     private static AgiMcBotMod instance;
+
     private ModConfig config;
     private HttpServer httpServer;
-    private MinecraftServer server;
 
-    @Override
-    public void onInitialize() {
+    public AgiMcBotMod() {
         instance = this;
-        LOGGER.info("[AGI-MC] 正在初始化...");
+        LOGGER.info("[AGI-MC] Initializing...");
 
-        // 1. 加载配置
+        // Load config
         this.config = ModConfig.load();
 
         if (!config.isEnabled()) {
-            LOGGER.warn("[AGI-MC] 配置中 enabled=false，Mod 已禁用");
+            LOGGER.warn("[AGI-MC] enabled=false in config, Mod disabled");
             return;
         }
 
-        // 2. 注册服务端生命周期
-        ServerLifecycleEvents.SERVER_STARTED.register(this::onServerStarted);
-        ServerLifecycleEvents.SERVER_STOPPING.register(this::onServerStopping);
+        // Register server lifecycle
+        MinecraftForge.EVENT_BUS.register(this);
 
-        LOGGER.info("[AGI-MC] 初始化完成，等待服务端启动");
-    }
-
-    private void onServerStarted(MinecraftServer server) {
-        this.server = server;
-        LOGGER.info("[AGI-MC] 服务端已启动，启动 HTTP 服务于 {}:{}",
-                config.getBindAddress(), config.getBindPort());
-
-        try {
-            this.httpServer = new HttpServer(config, server);
-            this.httpServer.start();
-            LOGGER.info("[AGI-MC] HTTP 服务已就绪");
-        } catch (Exception e) {
-            LOGGER.error("[AGI-MC] HTTP 服务启动失败", e);
-        }
-    }
-
-    private void onServerStopping(MinecraftServer server) {
-        LOGGER.info("[AGI-MC] 服务端正在关闭，清理资源...");
-
-        if (httpServer != null) {
-            httpServer.stop();
-        }
-
-        BotManager.getInstance().despawnAll();
-        LOGGER.info("[AGI-MC] 清理完成");
+        LOGGER.info("[AGI-MC] Init complete, waiting for server start");
     }
 
     public static AgiMcBotMod getInstance() {
@@ -78,7 +56,30 @@ public class AgiMcBotMod implements ModInitializer {
         return config;
     }
 
-    public MinecraftServer getServer() {
-        return server;
+    @SubscribeEvent
+    public void onServerStarting(FMLServerStartingEvent event) {
+        LOGGER.info("[AGI-MC] Server started, starting HTTP service on {}:{}",
+                config.getBindAddress(), config.getBindPort());
+
+        BotManager.init(event.getServer());
+
+        this.httpServer = new HttpServer(config, event.getServer());
+        try {
+            this.httpServer.start();
+        } catch (Exception e) {
+            LOGGER.error("[AGI-MC] HTTP service start failed", e);
+        }
+    }
+
+    @SubscribeEvent
+    public void onServerStopping(FMLServerStoppingEvent event) {
+        LOGGER.info("[AGI-MC] Server stopping, cleaning up");
+
+        if (this.httpServer != null) {
+            this.httpServer.stop();
+            this.httpServer = null;
+        }
+
+        BotManager.shutdown();
     }
 }

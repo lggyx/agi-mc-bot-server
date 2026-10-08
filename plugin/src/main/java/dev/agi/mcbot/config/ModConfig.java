@@ -1,15 +1,23 @@
 package dev.agi.mcbot.config;
 
+import net.minecraft.server.MinecraftServer;
+import net.minecraftforge.fml.loading.FMLPaths;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+
 import java.io.*;
 import java.nio.file.*;
-import java.util.*;
+import java.util.Properties;
+import java.util.UUID;
 
 /**
- * Mod 配置。
+ * Mod config.
  *
- * 配置文件位置：服务端运行目录 / config / agi-mc-bot.properties
+ * Config file location: server run dir / config / agi-mc-bot.properties
  */
 public class ModConfig {
+    private static final Logger LOGGER = LogManager.getLogger();
+
     private final Properties props;
 
     private ModConfig(Properties props) {
@@ -17,17 +25,18 @@ public class ModConfig {
     }
 
     public static ModConfig load() {
-        Path configPath = Path.of("config", "agi-mc-bot.properties");
+        Path configDir = FMLPaths.CONFIGDIR.get();
+        Path configPath = configDir.resolve("agi-mc-bot.properties");
         Properties props = new Properties();
 
         if (Files.exists(configPath)) {
             try (InputStream in = Files.newInputStream(configPath)) {
                 props.load(in);
             } catch (IOException e) {
-                AgiMcBotMod.LOGGER.error("[AGI-MC] 读取配置失败，使用默认值", e);
+                LOGGER.error("[AGI-MC] Failed to read config, using defaults", e);
             }
         } else {
-            // 首次启动：生成默认配置 + 随机 Token
+            // First start: generate default config + random token
             props.setProperty("bind.address", "127.0.0.1");
             props.setProperty("bind.port", "25580");
             props.setProperty("auth.token", generateToken());
@@ -38,8 +47,8 @@ public class ModConfig {
             props.setProperty("rate.limit", "60");
             save(configPath, props);
 
-            AgiMcBotMod.LOGGER.info("[AGI-MC] 已生成默认配置: {}", configPath.toAbsolutePath());
-            AgiMcBotMod.LOGGER.info("[AGI-MC] 鉴权 Token: {}", props.getProperty("auth.token"));
+            LOGGER.info("[AGI-MC] Generated default config: {}", configPath.toAbsolutePath());
+            LOGGER.info("[AGI-MC] Auth token: {}", props.getProperty("auth.token"));
         }
 
         return new ModConfig(props);
@@ -49,16 +58,19 @@ public class ModConfig {
         try {
             Files.createDirectories(path.getParent());
             try (OutputStream out = Files.newOutputStream(path)) {
-                props.store(out, "AGI MC Bot Bridge 配置");
+                props.store(out, "AGI MC Bot Bridge config");
             }
         } catch (IOException e) {
-            AgiMcBotMod.LOGGER.error("[AGI-MC] 保存配置失败", e);
+            LOGGER.error("[AGI-MC] Failed to save config", e);
         }
     }
 
     private static String generateToken() {
-        return UUID.randomUUID().toString().replace("-", "")
-                + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
+        return UUID.randomUUID().toString().replace("-", "");
+    }
+
+    public boolean isEnabled() {
+        return Boolean.parseBoolean(props.getProperty("enabled", "true"));
     }
 
     public String getBindAddress() {
@@ -66,19 +78,23 @@ public class ModConfig {
     }
 
     public int getBindPort() {
-        return Integer.parseInt(props.getProperty("bind.port", "25580"));
+        try {
+            return Integer.parseInt(props.getProperty("bind.port", "25580"));
+        } catch (NumberFormatException e) {
+            return 25580;
+        }
     }
 
     public String getAuthToken() {
         return props.getProperty("auth.token", "");
     }
 
-    public boolean isEnabled() {
-        return Boolean.parseBoolean(props.getProperty("enabled", "true"));
-    }
-
     public int getIdleTimeout() {
-        return Integer.parseInt(props.getProperty("idle.timeout", "300"));
+        try {
+            return Integer.parseInt(props.getProperty("idle.timeout", "300"));
+        } catch (NumberFormatException e) {
+            return 300;
+        }
     }
 
     public boolean isAuditEnabled() {
@@ -90,6 +106,10 @@ public class ModConfig {
     }
 
     public int getRateLimit() {
-        return Integer.parseInt(props.getProperty("rate.limit", "60"));
+        try {
+            return Integer.parseInt(props.getProperty("rate.limit", "60"));
+        } catch (NumberFormatException e) {
+            return 60;
+        }
     }
 }

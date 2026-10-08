@@ -1,25 +1,32 @@
 package dev.agi.mcbot.net;
 
-import com.fasterxml.jackson.databind.*;
-import dev.agi.mcbot.AgiMcBotMod;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import dev.agi.mcbot.config.ModConfig;
 import io.javalin.Javalin;
 import io.javalin.http.Context;
 import net.minecraft.server.MinecraftServer;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 /**
- * HTTP JSON-RPC 服务。
+ * HTTP JSON-RPC service.
  *
- * 端点：
- *   POST /rpc   JSON-RPC 2.0
- *   GET  /health 健康检查（无需鉴权）
+ * Endpoints:
+ *   POST /rpc     JSON-RPC 2.0
+ *   GET  /health  health check (no auth)
  *
- * 鉴权：Header "Authorization: Bearer <token>"
+ * Auth: Header "Authorization: Bearer <token>"
  */
 public class HttpServer {
+    private static final Logger LOGGER = LogManager.getLogger();
+
     private final ModConfig config;
     private final MinecraftServer server;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -27,6 +34,7 @@ public class HttpServer {
     private final RateLimiter rateLimiter;
 
     private Javalin app;
+    private ScheduledExecutorService scheduler;
 
     public HttpServer(ModConfig config, MinecraftServer server) {
         this.config = config;
@@ -36,104 +44,92 @@ public class HttpServer {
     }
 
     public void start() {
-        app = Javalin.create(cfg -> {
-                    cfg.showJavalinBanner = false;
-                })
+        app = Javalin.create()
                 .before(ctx -> {
-                    // 健康检查跳过鉴权
                     if (ctx.path().equals("/health")) return;
 
                     String auth = ctx.header("Authorization");
                     if (auth == null || !auth.equals("Bearer " + config.getAuthToken())) {
-                        ctx.status(401).json(Map.of(
-                                "jsonrpc", "2.0",
-                                "error", Map.of("code", -32001, "message", "Unauthorized"),
-                                "id", (Object) null
-                        ));
+                        ctx.status(401).json(errorBody(null, -32001, "Unauthorized"));
                         return;
                     }
 
-                    // 速率限制
                     if (!rateLimiter.tryAcquire(ctx.ip())) {
-                        ctx.status(429).json(Map.of(
-                                "jsonrpc", "2.0",
-                                "error", Map.of("code", -32002, "message", "Rate limit exceeded"),
-                                "id", (Object) null
-                        ));
+                        ctx.status(429).json(errorBody(null, -32000, "Rate limit exceeded"));
                     }
                 })
-                .get("/health", ctx -> ctx.json(Map.of("status", "ok")))
                 .post("/rpc", this::handleRpc)
+                .get("/health", ctx -> {
+                    Map<String, String> health = new java.util.HashMap<>();
+                    health.put("status", "ok");
+                    ctx.json(health);
+                })
+                .exception(Exception.class, (e, ctx) -> {
+                    LOGGER.error("[AGI-MC] HTTP exception", e);
+                    ctx.status(500).json(errorBody(null, -32603, "Internal error"));
+                })
                 .start(config.getBindAddress(), config.getBindPort());
+
+        // periodically clean up expired rate limit buckets
+        scheduler = Executors.newSingleThreadScheduledExecutor();
+        scheduler.scheduleAtFixedRate(rateLimiter::cleanup, 1, 1, TimeUnit.MINUTES);
+
+        LOGGER.info("[AGI-MC] HTTP service started on {}:{}",
+                config.getBindAddress(), config.getBindPort());
     }
 
     public void stop() {
+        if (scheduler != null) {
+            scheduler.shutdownNow();
+            scheduler = null;
+        }
         if (app != null) {
             app.stop();
+            app = null;
         }
+        LOGGER.info("[AGI-MC] HTTP service stopped");
     }
 
     private void handleRpc(Context ctx) {
+        JsonNode req;
         try {
-            JsonNode req = mapper.readTree(ctx.body());
-            String method = req.path("method").asText();
-            JsonNode params = req.path("params");
-            JsonNode id = req.get("id");
+            req = mapper.readTree(ctx.body());
+        } catch (Exception e) {
+            ctx.json(errorBody(null, -32700, "Parse error"));
+            return;
+        }
 
+        String method = req.path("method").asText(null);
+        JsonNode params = req.path("params");
+        JsonNode id = req.get("id");
+
+        if (method == null) {
+            ctx.json(errorBody(id, -32600, "Invalid Request"));
+            return;
+        }
+
+        try {
             Object result = handler.dispatch(method, params);
-
-            Map<String, Object> resp = new LinkedHashMap<>();
+            ObjectNode resp = mapper.createObjectNode();
             resp.put("jsonrpc", "2.0");
-            resp.put("result", result);
-            resp.put("id", id);
+            if (id != null) resp.set("id", id);
+            resp.set("result", mapper.valueToTree(result));
             ctx.json(resp);
-
         } catch (RpcException e) {
-            sendError(ctx, ctx.body().isEmpty() ? null : safeId(ctx.body()), e.getCode(), e.getMessage());
+            ctx.json(errorBody(id, e.getCode(), e.getMessage()));
         } catch (Exception e) {
-            AgiMcBotMod.LOGGER.error("[AGI-MC] RPC 处理异常", e);
-            sendError(ctx, null, -32603, "Internal error: " + e.getMessage());
+            LOGGER.error("[AGI-MC] RPC failed: " + method, e);
+            ctx.json(errorBody(id, -32603, "Internal error: " + e.getMessage()));
         }
     }
 
-    private Object safeId(String body) {
-        try {
-            return mapper.readTree(body).get("id");
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private void sendError(Context ctx, Object id, int code, String message) {
-        Map<String, Object> resp = new LinkedHashMap<>();
+    private ObjectNode errorBody(JsonNode id, int code, String message) {
+        ObjectNode resp = new ObjectMapper().createObjectNode();
         resp.put("jsonrpc", "2.0");
-        resp.put("error", Map.of("code", code, "message", message));
-        resp.put("id", id);
-        ctx.json(resp);
-    }
-
-    /**
-     * 简单令牌桶速率限制器。
-     */
-    static class RateLimiter {
-        private final int maxPerSecond;
-        private final Map<String, Deque<Long>> buckets = new ConcurrentHashMap<>();
-
-        RateLimiter(int maxPerSecond) {
-            this.maxPerSecond = maxPerSecond;
-        }
-
-        boolean tryAcquire(String key) {
-            long now = System.currentTimeMillis();
-            Deque<Long> q = buckets.computeIfAbsent(key, k -> new ConcurrentLinkedDeque<>());
-            synchronized (q) {
-                while (!q.isEmpty() && now - q.peekFirst() > 1000) {
-                    q.pollFirst();
-                }
-                if (q.size() >= maxPerSecond) return false;
-                q.addLast(now);
-                return true;
-            }
-        }
+        if (id != null) resp.set("id", id);
+        ObjectNode err = resp.putObject("error");
+        err.put("code", code);
+        err.put("message", message);
+        return resp;
     }
 }

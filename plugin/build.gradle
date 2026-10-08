@@ -1,52 +1,77 @@
-plugin {
-    id 'fabric-loom' version '1.10-SNAPSHOT'
-    id 'maven-publish'
-    id 'java'
+buildscript {
+    repositories {
+        maven { url = 'https://maven.minecraftforge.net' }
+        mavenCentral()
+    }
+    dependencies {
+        classpath group: 'net.minecraftforge.gradle', name: 'ForgeGradle', version: '5.1.+', changing: true
+    }
 }
+apply plugin: 'net.minecraftforge.gradle'
+apply plugin: 'eclipse'
+apply plugin: 'maven-publish'
 
 version = '1.0.0'
 group = 'dev.agi.mcbot'
 archivesBaseName = 'agi-mc-bot-bridge'
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_25
-    targetCompatibility = JavaVersion.VERSION_25
-    withSourcesJar()
+java.toolchain.languageVersion = JavaLanguageVersion.of(8)
+
+println('Java: ' + System.getProperty('java.version') + ' JVM: ' + System.getProperty('java.vm.version') + '(' + System.getProperty('java.vendor') + ') Arch: ' + System.getProperty('os.arch'))
+
+minecraft {
+    // official 映射：类名 = Mojang 官方名（EntityPlayerMP / WorldServer / MinecraftServer）
+    mappings channel: 'official', version: '1.16.5'
+
+    runs {
+        server {
+            workingDirectory project.file('run')
+
+            property 'forge.logging.markers', 'REGISTRIES'
+            property 'forge.logging.console.level', 'debug'
+
+            mods {
+                agimcbot {
+                    source sourceSets.main
+                }
+            }
+        }
+    }
 }
+
+sourceSets.main.resources { srcDir 'src/generated/resources' }
 
 repositories {
     mavenCentral()
-    maven { url = 'https://maven.fabricmc.net/' }
 }
 
 dependencies {
-    minecraft "com.mojang:minecraft:26.2"
-    mappings "net.fabricmc:yarn:26.2+build.1:v2"
-    modImplementation "net.fabricmc:fabric-loader:0.19.5"
-    modImplementation "net.fabricmc:fabric-api:0.161.0+26.2"
+    minecraft 'net.minecraftforge:forge:1.16.5-36.2.34'
 
-    // HTTP 服务
-    implementation 'io.javalin:javalin:6.4.0'
-    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.2'
+    // HTTP 服务（Javalin 3.x 是最后一个支持 Java 8 的系列）
+    implementation 'io.javalin:javalin:3.13.13'
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.12.7.1'
 
-    // 日志
-    implementation 'org.slf4j:slf4j-api:2.0.16'
-}
-
-processResources {
-    inputs.property "version", project.version
-    filesMatching("fabric.mod.json") {
-        expand "version": project.version
-    }
+    // 日志（Forge 自带 log4j2，这里只引用 API）
+    implementation 'org.apache.logging.log4j:log4j-api:2.17.2'
 }
 
 tasks.withType(JavaCompile).configureEach {
-    it.options.encoding = "UTF-8"
-    it.options.release = 25
+    it.options.encoding = 'UTF-8'
 }
 
 jar {
-    from("LICENSE") {
-        rename { "${it}_${project.archivesBaseName}" }
+    manifest {
+        attributes([
+            "Specification-Title": "agi-mc-bot-bridge",
+            "Specification-Vendor": "agi",
+            "Specification-Version": "1",
+            "Implementation-Title": project.name,
+            "Implementation-Version": "${version}",
+            "Implementation-Vendor": "agi",
+            "Implementation-Timestamp": new Date().format("yyyy-MM-dd'T'HH:mm:ssZ")
+        ])
     }
 }
+
+jar.finalizedBy('reobfJar')

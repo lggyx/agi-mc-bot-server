@@ -1,0 +1,32 @@
+modLoader="javafml"
+loaderVersion="[36,)"
+license="MIT"
+#issueTrackerURL="https://github.com/lggyx/agi-mc-bot-server/issues"
+
+[[mods]]
+modId="agimcbot"
+version="${file.jarVersion}"
+displayName="AGI MC Bot Bridge"
+#displayURL="https://github.com/lggyx/agi-mc-bot-server"
+logoFile="agimcbot.png"
+credits="Thanks to the Forge and Fabric communities"
+authors="agi"
+description='''
+让 AI 通过 MCP 协议控制 Minecraft 中的 Bot 角色。
+
+架构：AI Client -> MCP Server (Node.js) -> HTTP JSON-RPC -> 本 Mod -> Forge Server API
+'''
+
+[[dependencies.agimcbot]]
+    modId="forge"
+    mandatory=true
+    versionRange="[36,)"
+    ordering="NONE"
+    side="BOTH"
+
+[[dependencies.agimcbot]]
+    modId="minecraft"
+    mandatory=true
+    versionRange="[1.16.5,1.17)"
+    ordering="NONE"
+    side="BOTH"
